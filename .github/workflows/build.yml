@@ -79,6 +79,9 @@ jobs:
     - name: Build Python Backend 🛠️
       working-directory: ./backend
       run: |
+        # PB-OS: PBOS_VERSION names the upstream release this branch rebuilds
+        # (the commit sits past that tag, which would read as -devN).
+        if [ -f ../PBOS_VERSION ]; then export POETRY_DYNAMIC_VERSIONING_BYPASS="$(cat ../PBOS_VERSION)"; fi
         poetry dynamic-versioning 
         DECKY_REPO="${{ github.repository }}" DECKY_BRANCH="${{ github.event.number && format('PR{0}/{1}', github.event.number, github.head_ref) || github.ref_name }}" ${{ inputs.noconsole == true && 'DECKY_NOCONSOLE=1 ' || '' }}pyinstaller pyinstaller.spec
         echo Builds:
