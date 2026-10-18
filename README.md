@@ -1,3 +1,17 @@
+> [!IMPORTANT]
+> **Project Barry's additions to this fork were built with a coding agent:
+> [Claude Code](https://www.anthropic.com/claude-code), running Anthropic's
+> Claude Opus 5.5 (`claude-opus-5-5`).** This applies only to what Project
+> Barry added (the native ARM64 Linux build for PB-OS on the `pbos-arm64` branch: the build
+> runner and version in `.github/workflows/build.yml` and `PBOS_VERSION`): Claude wrote that change, its commit messages and this
+> note. Everything else is upstream [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader)'s work, by its own authors. People set
+> the goals, made the decisions and did the hands-on testing. Review the code
+> before you rely on it. See [a note from lavachemist](https://github.com/project-barry), a human, on Project Barry and generative AI.
+
+> **This fork's `pbos-arm64` branch** builds `PluginLoader-arm64` on Ubuntu 24.04 (glibc 2.39)
+> so it runs on SteamOS for ARM (PB-OS). Releases here carry only that binary;
+> for everything else use [upstream's releases](https://github.com/SteamDeckHomebrew/decky-loader/releases).
+
 <h1 align="center">
   <a name="logo" href="https://deckbrew.xyz/"><img src="https://deckbrew.xyz/static/icon-45ca1f5aea376a9ad37e92db906f283e.png" alt="Deckbrew logo" width="200"></a>
   <br>
