@@ -1,0 +1,161 @@
+# PB-OS: rebuild each upstream Decky Loader release as PluginLoader-arm64 for
+# SteamOS on PB-OS devices (glibc 2.39), and leave it here as a DRAFT release.
+# Nothing reaches devices until a person tests the draft and publishes it.
+#
+# Upstream's own arm64 binary is built on a newer Ubuntu and needs a newer
+# glibc. This builds upstream's tagged source unchanged, on ubuntu-24.04-arm,
+# with the build steps of upstream's .github/workflows/build.yml.
+name: PB-OS upstream release (Linux arm64)
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream release tag to build (empty = upstream's latest release)
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency: pbos-upstream-release
+
+env:
+  UPSTREAM: SteamDeckHomebrew/decky-loader
+  MAX_GLIBC: "2.39"
+
+jobs:
+  check:
+    name: New upstream release?
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.find.outputs.tag }}
+      sha: ${{ steps.find.outputs.sha }}
+    steps:
+      - name: Find an upstream release without a release here
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANT: ${{ inputs.tag }}
+        run: |
+          tag="${WANT:-$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::upstream tag '$tag' is not vX.Y.Z"; exit 1
+          fi
+          # Drafts count: one waiting for a person is not built again.
+          if gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[].tag_name' | grep -qx "$tag"; then
+            echo "$tag: already has a release here (maybe a draft), nothing to do"
+            exit 0
+          fi
+          sha="$(gh api "repos/$UPSTREAM/commits/$tag" --jq .sha)"
+          echo "$tag ($sha): new, building"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ needs.check.outputs.tag }} (Linux arm64)
+    needs: check
+    if: needs.check.outputs.tag != ''
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+      SHA: ${{ needs.check.outputs.sha }}
+    steps:
+      - name: Checkout PB-OS scripts
+        uses: actions/checkout@v7
+        with:
+          path: pbos
+
+      - name: Checkout upstream ${{ needs.check.outputs.tag }}
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.UPSTREAM }}
+          ref: ${{ needs.check.outputs.sha }}
+          path: src
+
+      - name: Tool versions from upstream's build.yml
+        id: tools
+        run: |
+          f=src/.github/workflows/build.yml
+          node="$(grep -oP 'node-version:\s*"?\K[0-9.]+' "$f" | head -1)"
+          python="$(grep -oP 'python-version:\s*"?\K[0-9.]+' "$f" | head -1)"
+          if [ -z "$node" ] || [ -z "$python" ]; then
+            echo "::error::upstream's build.yml changed: node '$node', python '$python'. Update this workflow."; exit 1
+          fi
+          echo "node $node, python $python"
+          echo "node=$node" >> "$GITHUB_OUTPUT"
+          echo "python=$python" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ steps.tools.outputs.node }}
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ steps.tools.outputs.python }}
+
+      - uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: false
+
+      # The version the updater shows and compares with the release tag.
+      # Set before poetry install, which records it.
+      - name: Version ${{ needs.check.outputs.tag }}
+        run: echo "POETRY_DYNAMIC_VERSIONING_BYPASS=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Install Python dependencies
+        working-directory: src/backend
+        run: |
+          poetry self add "poetry-dynamic-versioning[plugin]"
+          poetry install --no-interaction
+
+      - name: Install JS dependencies
+        working-directory: src/frontend
+        run: |
+          npm i -g pnpm
+          pnpm i --frozen-lockfile
+
+      - name: Build JS frontend
+        working-directory: src/frontend
+        run: pnpm run build
+
+      # DECKY_REPO: the loader updates itself from this repo's releases, so
+      # it never fetches upstream's arm64 binary that PB-OS can't load.
+      - name: Build Python backend
+        working-directory: src/backend
+        run: |
+          poetry dynamic-versioning
+          DECKY_REPO="$GITHUB_REPOSITORY" DECKY_BRANCH=main pyinstaller pyinstaller.spec
+          mv dist/PluginLoader "$GITHUB_WORKSPACE/PluginLoader-arm64"
+
+      - name: Check (aarch64, version, glibc)
+        run: python pbos/.github/pbos/check-pluginloader.py PluginLoader-arm64 "$TAG" "$MAX_GLIBC"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: PluginLoader-arm64-${{ needs.check.outputs.tag }}
+          path: PluginLoader-arm64
+
+      # Keeps main a mirror of upstream. Fails when upstream changed its
+      # workflows (this token may not push those); then sync main by hand
+      # (gh repo sync project-barry/decky-loader) before publishing.
+      - name: Sync main with upstream
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/$GITHUB_REPOSITORY/merge-upstream" -f branch=main
+
+      - name: Draft release ${{ needs.check.outputs.tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          sed -e "s|@TAG@|$TAG|g; s|@SHA@|$SHA|g; s|@RUN@|$RUN|g; s|@GLIBC@|$MAX_GLIBC|g" \
+            pbos/.github/pbos/release-notes.md > notes.md
+          gh release create "$TAG" PluginLoader-arm64 -R "$GITHUB_REPOSITORY" \
+            --draft --target "$SHA" --title "$TAG (PB-OS arm64)" --notes-file notes.md
